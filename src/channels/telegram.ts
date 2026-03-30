@@ -13,12 +13,51 @@ import {
 } from '../types.js';
 
 const TEXT_EXTENSIONS = new Set([
-  '.md', '.txt', '.json', '.csv', '.xml', '.html', '.htm', '.log',
-  '.yaml', '.yml', '.toml', '.py', '.js', '.ts', '.jsx', '.tsx',
-  '.sh', '.bash', '.cfg', '.ini', '.conf', '.rst', '.sql', '.env',
-  '.gitignore', '.dockerignore', '.editorconfig', '.css', '.scss',
-  '.less', '.go', '.rs', '.rb', '.php', '.java', '.kt', '.swift',
-  '.c', '.cpp', '.h', '.hpp', '.r', '.m', '.lua', '.pl',
+  '.md',
+  '.txt',
+  '.json',
+  '.csv',
+  '.xml',
+  '.html',
+  '.htm',
+  '.log',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.py',
+  '.js',
+  '.ts',
+  '.jsx',
+  '.tsx',
+  '.sh',
+  '.bash',
+  '.cfg',
+  '.ini',
+  '.conf',
+  '.rst',
+  '.sql',
+  '.env',
+  '.gitignore',
+  '.dockerignore',
+  '.editorconfig',
+  '.css',
+  '.scss',
+  '.less',
+  '.go',
+  '.rs',
+  '.rb',
+  '.php',
+  '.java',
+  '.kt',
+  '.swift',
+  '.c',
+  '.cpp',
+  '.h',
+  '.hpp',
+  '.r',
+  '.m',
+  '.lua',
+  '.pl',
 ]);
 
 const MAX_DOCUMENT_SIZE = 102_400; // 100KB
@@ -141,18 +180,14 @@ export class TelegramChannel implements Channel {
 
       // Check for API error responses
       if ('error' in response) {
-        logger.error(
-          { error: response.error, fileId },
-          'OpenRouter API error',
-        );
+        logger.error({ error: response.error, fileId }, 'OpenRouter API error');
         return null;
       }
 
       const choices = response.choices as
         | Array<{ message?: { content?: string } }>
         | undefined;
-      const transcription =
-        choices?.[0]?.message?.content?.trim() ?? null;
+      const transcription = choices?.[0]?.message?.content?.trim() ?? null;
       if (transcription) {
         logger.info({ fileId }, 'Voice message transcribed successfully');
       } else {
@@ -246,8 +281,7 @@ export class TelegramChannel implements Channel {
       const choices = response.choices as
         | Array<{ message?: { content?: string } }>
         | undefined;
-      const description =
-        choices?.[0]?.message?.content?.trim() ?? null;
+      const description = choices?.[0]?.message?.content?.trim() ?? null;
       if (description) {
         logger.info({ fileId }, 'Photo described successfully');
       } else {
@@ -263,7 +297,10 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  private async downloadDocument(fileId: string, fileName: string): Promise<string | null> {
+  private async downloadDocument(
+    fileId: string,
+    fileName: string,
+  ): Promise<string | null> {
     try {
       logger.info({ fileId, fileName }, 'Document download started');
 
@@ -274,13 +311,22 @@ export class TelegramChannel implements Channel {
         result?: { file_path: string; file_size?: number };
       };
       if (!fileInfo.ok || !fileInfo.result?.file_path) {
-        logger.warn({ fileId }, 'Failed to get document file info from Telegram');
+        logger.warn(
+          { fileId },
+          'Failed to get document file info from Telegram',
+        );
         return null;
       }
 
       // Check file size before downloading
-      if (fileInfo.result.file_size && fileInfo.result.file_size > MAX_DOCUMENT_SIZE) {
-        logger.info({ fileId, size: fileInfo.result.file_size }, 'Document too large to inline');
+      if (
+        fileInfo.result.file_size &&
+        fileInfo.result.file_size > MAX_DOCUMENT_SIZE
+      ) {
+        logger.info(
+          { fileId, size: fileInfo.result.file_size },
+          'Document too large to inline',
+        );
         return null;
       }
 
@@ -289,12 +335,18 @@ export class TelegramChannel implements Channel {
       ).then((r) => r.arrayBuffer());
 
       if (buffer.byteLength > MAX_DOCUMENT_SIZE) {
-        logger.info({ fileId, size: buffer.byteLength }, 'Document too large to inline');
+        logger.info(
+          { fileId, size: buffer.byteLength },
+          'Document too large to inline',
+        );
         return null;
       }
 
       const content = Buffer.from(buffer).toString('utf-8');
-      logger.info({ fileId, fileName, size: content.length }, 'Document downloaded successfully');
+      logger.info(
+        { fileId, fileName, size: content.length },
+        'Document downloaded successfully',
+      );
       return content;
     } catch (err) {
       logger.error({ err, fileId, fileName }, 'Document download failed');
@@ -466,7 +518,9 @@ export class TelegramChannel implements Channel {
             ctx.from?.username ||
             ctx.from?.id?.toString() ||
             'Unknown';
-          const caption = ctx.message.caption ? `\nCaption: ${ctx.message.caption}` : '';
+          const caption = ctx.message.caption
+            ? `\nCaption: ${ctx.message.caption}`
+            : '';
           const isGroup =
             ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
           this.opts.onChatMetadata(

@@ -591,7 +591,10 @@ describe('DiscordChannel', () => {
       await triggerMessage(msg);
 
       // Set up mock channel with messages.fetch and startThread
-      const mockThread = { id: 'thread_001', send: vi.fn().mockResolvedValue(undefined) };
+      const mockThread = {
+        id: 'thread_001',
+        send: vi.fn().mockResolvedValue(undefined),
+      };
       const mockTriggerMsg = {
         content: '@Andy what is 2+2?',
         startThread: vi.fn().mockResolvedValue(mockThread),
@@ -626,7 +629,9 @@ describe('DiscordChannel', () => {
       // First fetch (for thread creation) — fail on startThread
       const mockFailMsg = {
         content: 'help',
-        startThread: vi.fn().mockRejectedValue(new Error('Cannot create thread')),
+        startThread: vi
+          .fn()
+          .mockRejectedValue(new Error('Cannot create thread')),
       };
       const mockFailChannel = {
         messages: { fetch: vi.fn().mockResolvedValue(mockFailMsg) },
@@ -636,8 +641,8 @@ describe('DiscordChannel', () => {
       const mockFallbackChannel = {
         send: vi.fn().mockResolvedValue(undefined),
       };
-      currentClient().channels.fetch
-        .mockResolvedValueOnce(mockFailChannel)
+      currentClient()
+        .channels.fetch.mockResolvedValueOnce(mockFailChannel)
         .mockResolvedValueOnce(mockFallbackChannel);
 
       await channel.sendMessage('dc:1234567890123456', 'Fallback reply');

@@ -660,14 +660,18 @@ describe('TelegramChannel', () => {
       await channel.connect();
 
       const fileContent = '# Hello World\n\nThis is a test document.';
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
-        async (url: string | URL | Request) => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async (url: string | URL | Request) => {
           const urlStr = url.toString();
           if (urlStr.includes('/getFile')) {
             return {
               json: async () => ({
                 ok: true,
-                result: { file_path: 'documents/file_0.md', file_size: fileContent.length },
+                result: {
+                  file_path: 'documents/file_0.md',
+                  file_size: fileContent.length,
+                },
               }),
             } as Response;
           }
@@ -676,8 +680,7 @@ describe('TelegramChannel', () => {
             arrayBuffer: async () =>
               new TextEncoder().encode(fileContent).buffer,
           } as Response;
-        },
-      );
+        });
 
       const ctx = createMediaCtx({
         extra: { document: { file_name: 'notes.md', file_id: 'doc-123' } },
@@ -706,14 +709,18 @@ describe('TelegramChannel', () => {
       await channel.connect();
 
       const fileContent = 'some content';
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
-        async (url: string | URL | Request) => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async (url: string | URL | Request) => {
           const urlStr = url.toString();
           if (urlStr.includes('/getFile')) {
             return {
               json: async () => ({
                 ok: true,
-                result: { file_path: 'documents/file_0.txt', file_size: fileContent.length },
+                result: {
+                  file_path: 'documents/file_0.txt',
+                  file_size: fileContent.length,
+                },
               }),
             } as Response;
           }
@@ -721,8 +728,7 @@ describe('TelegramChannel', () => {
             arrayBuffer: async () =>
               new TextEncoder().encode(fileContent).buffer,
           } as Response;
-        },
-      );
+        });
 
       const ctx = createMediaCtx({
         caption: 'Please review this',
@@ -761,13 +767,13 @@ describe('TelegramChannel', () => {
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
-        async () => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async () => {
           return {
             json: async () => ({ ok: false }),
           } as Response;
-        },
-      );
+        });
 
       const ctx = createMediaCtx({
         extra: { document: { file_name: 'notes.md', file_id: 'doc-fail' } },
@@ -787,8 +793,9 @@ describe('TelegramChannel', () => {
       const channel = new TelegramChannel('test-token', opts);
       await channel.connect();
 
-      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
-        async (url: string | URL | Request) => {
+      const fetchSpy = vi
+        .spyOn(globalThis, 'fetch')
+        .mockImplementation(async (url: string | URL | Request) => {
           const urlStr = url.toString();
           if (urlStr.includes('/getFile')) {
             return {
@@ -799,8 +806,7 @@ describe('TelegramChannel', () => {
             } as Response;
           }
           return { arrayBuffer: async () => new ArrayBuffer(0) } as Response;
-        },
-      );
+        });
 
       const ctx = createMediaCtx({
         extra: { document: { file_name: 'big.md', file_id: 'doc-big' } },

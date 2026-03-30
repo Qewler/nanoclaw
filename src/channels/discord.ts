@@ -236,8 +236,10 @@ export class DiscordChannel implements Channel {
             const textChannel = channel as TextChannel;
             const triggerMsg = await textChannel.messages.fetch(triggerMsgId);
             const threadName =
-              triggerMsg.content.replace(/^@\S+\s*/i, '').slice(0, 50).trim() ||
-              'Conversation';
+              triggerMsg.content
+                .replace(/^@\S+\s*/i, '')
+                .slice(0, 50)
+                .trim() || 'Conversation';
             const thread = await triggerMsg.startThread({
               name: threadName,
               autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
