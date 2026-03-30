@@ -96,6 +96,16 @@ function buildVolumeMounts(
       containerPath: '/workspace/group',
       readonly: false,
     });
+
+    // Global memory directory (shared personality/knowledge for all groups)
+    const globalDirMain = path.join(GROUPS_DIR, 'global');
+    if (fs.existsSync(globalDirMain)) {
+      mounts.push({
+        hostPath: globalDirMain,
+        containerPath: '/workspace/global',
+        readonly: true,
+      });
+    }
   } else {
     // Other groups only get their own folder
     mounts.push({
@@ -166,7 +176,7 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Gmail credentials directory (for Gmail MCP inside the container)
+  // Gmail credentials directories (for Gmail MCP inside the container)
   const homeDir = os.homedir();
   const gmailDir = path.join(homeDir, '.gmail-mcp');
   if (fs.existsSync(gmailDir)) {
@@ -174,6 +184,14 @@ function buildVolumeMounts(
       hostPath: gmailDir,
       containerPath: '/home/node/.gmail-mcp',
       readonly: false, // MCP may need to refresh OAuth tokens
+    });
+  }
+  const gmailDir2 = path.join(homeDir, '.gmail-mcp-qewler');
+  if (fs.existsSync(gmailDir2)) {
+    mounts.push({
+      hostPath: gmailDir2,
+      containerPath: '/home/node/.gmail-mcp-qewler',
+      readonly: false,
     });
   }
 

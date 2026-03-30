@@ -12,6 +12,23 @@ import {
   RegisteredGroup,
 } from '../types.js';
 
+const TEXT_EXTENSIONS = new Set([
+  '.md', '.txt', '.json', '.csv', '.xml', '.html', '.htm', '.log',
+  '.yaml', '.yml', '.toml', '.py', '.js', '.ts', '.jsx', '.tsx',
+  '.sh', '.bash', '.cfg', '.ini', '.conf', '.rst', '.sql', '.env',
+  '.gitignore', '.dockerignore', '.editorconfig', '.css', '.scss',
+  '.less', '.go', '.rs', '.rb', '.php', '.java', '.kt', '.swift',
+  '.c', '.cpp', '.h', '.hpp', '.r', '.m', '.lua', '.pl',
+]);
+
+const MAX_DOCUMENT_SIZE = 102_400; // 100KB
+
+function isTextFile(fileName: string): boolean {
+  const dot = fileName.lastIndexOf('.');
+  if (dot === -1) return false;
+  return TEXT_EXTENSIONS.has(fileName.slice(dot).toLowerCase());
+}
+
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
@@ -51,6 +68,238 @@ export class TelegramChannel implements Channel {
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
     this.opts = opts;
+  }
+
+  private async transcribeVoice(fileId: string): Promise<string | null> {
+    try {
+      logger.info({ fileId }, 'Voice transcription started');
+
+      const envVars = readEnvFile(['OPENROUTER_API_KEY']);
+      const apiKey =
+        process.env.OPENROUTER_API_KEY || envVars.OPENROUTER_API_KEY;
+      if (!apiKey) {
+        logger.warn('OPENROUTER_API_KEY not set, skipping voice transcription');
+        return null;
+      }
+
+      // Get file path from Telegram
+      const fileInfo = (await fetch(
+        `https://api.telegram.org/bot${this.botToken}/getFile?file_id=${encodeURIComponent(fileId)}`,
+      ).then((r) => r.json())) as {
+        ok: boolean;
+        result?: { file_path: string };
+      };
+      if (!fileInfo.ok || !fileInfo.result?.file_path) {
+        logger.warn({ fileId }, 'Failed to get voice file info from Telegram');
+        return null;
+      }
+
+      // Download audio bytes
+      const audioBuffer = await fetch(
+        `https://api.telegram.org/file/bot${this.botToken}/${fileInfo.result.file_path}`,
+      ).then((r) => r.arrayBuffer());
+
+      const base64Audio = Buffer.from(audioBuffer).toString('base64');
+      logger.info(
+        { fileId, audioSize: base64Audio.length },
+        'Audio downloaded, calling OpenRouter',
+      );
+
+      // Transcribe via OpenRouter Gemini 3.1 Flash Lite
+      // Use data URI in image_url field — OpenRouter's OpenAI-compatible API
+      // passes multimodal content (including audio) this way for Gemini models
+      const response = (await fetch(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-3.1-flash-lite-preview',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: `data:audio/ogg;base64,${base64Audio}`,
+                    },
+                  },
+                  {
+                    type: 'text',
+                    text: 'Transcribe this voice message accurately. Return only the transcription, nothing else.',
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      ).then((r) => r.json())) as Record<string, unknown>;
+
+      // Check for API error responses
+      if ('error' in response) {
+        logger.error(
+          { error: response.error, fileId },
+          'OpenRouter API error',
+        );
+        return null;
+      }
+
+      const choices = response.choices as
+        | Array<{ message?: { content?: string } }>
+        | undefined;
+      const transcription =
+        choices?.[0]?.message?.content?.trim() ?? null;
+      if (transcription) {
+        logger.info({ fileId }, 'Voice message transcribed successfully');
+      } else {
+        logger.warn(
+          { fileId, response: JSON.stringify(response).slice(0, 500) },
+          'OpenRouter returned no transcription',
+        );
+      }
+      return transcription;
+    } catch (err) {
+      logger.error({ err, fileId }, 'Voice transcription failed');
+      return null;
+    }
+  }
+
+  private async describePhoto(fileId: string): Promise<string | null> {
+    try {
+      logger.info({ fileId }, 'Photo description started');
+
+      const envVars = readEnvFile(['OPENROUTER_API_KEY']);
+      const apiKey =
+        process.env.OPENROUTER_API_KEY || envVars.OPENROUTER_API_KEY;
+      if (!apiKey) {
+        logger.warn('OPENROUTER_API_KEY not set, skipping photo description');
+        return null;
+      }
+
+      // Get file path from Telegram
+      const fileInfo = (await fetch(
+        `https://api.telegram.org/bot${this.botToken}/getFile?file_id=${encodeURIComponent(fileId)}`,
+      ).then((r) => r.json())) as {
+        ok: boolean;
+        result?: { file_path: string };
+      };
+      if (!fileInfo.ok || !fileInfo.result?.file_path) {
+        logger.warn({ fileId }, 'Failed to get photo file info from Telegram');
+        return null;
+      }
+
+      // Download image bytes
+      const imageBuffer = await fetch(
+        `https://api.telegram.org/file/bot${this.botToken}/${fileInfo.result.file_path}`,
+      ).then((r) => r.arrayBuffer());
+
+      const base64Image = Buffer.from(imageBuffer).toString('base64');
+      logger.info(
+        { fileId, imageSize: base64Image.length },
+        'Photo downloaded, calling OpenRouter for description',
+      );
+
+      // Describe via OpenRouter Gemini (same approach as voice transcription)
+      const response = (await fetch(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-3.1-flash-lite-preview',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: `data:image/jpeg;base64,${base64Image}`,
+                    },
+                  },
+                  {
+                    type: 'text',
+                    text: 'Describe this image in detail. Include all visible text, content, and context. Be thorough and accurate.',
+                  },
+                ],
+              },
+            ],
+          }),
+        },
+      ).then((r) => r.json())) as Record<string, unknown>;
+
+      if ('error' in response) {
+        logger.error(
+          { error: response.error, fileId },
+          'OpenRouter API error during photo description',
+        );
+        return null;
+      }
+
+      const choices = response.choices as
+        | Array<{ message?: { content?: string } }>
+        | undefined;
+      const description =
+        choices?.[0]?.message?.content?.trim() ?? null;
+      if (description) {
+        logger.info({ fileId }, 'Photo described successfully');
+      } else {
+        logger.warn(
+          { fileId, response: JSON.stringify(response).slice(0, 500) },
+          'OpenRouter returned no description',
+        );
+      }
+      return description;
+    } catch (err) {
+      logger.error({ err, fileId }, 'Photo description failed');
+      return null;
+    }
+  }
+
+  private async downloadDocument(fileId: string, fileName: string): Promise<string | null> {
+    try {
+      logger.info({ fileId, fileName }, 'Document download started');
+
+      const fileInfo = (await fetch(
+        `https://api.telegram.org/bot${this.botToken}/getFile?file_id=${encodeURIComponent(fileId)}`,
+      ).then((r) => r.json())) as {
+        ok: boolean;
+        result?: { file_path: string; file_size?: number };
+      };
+      if (!fileInfo.ok || !fileInfo.result?.file_path) {
+        logger.warn({ fileId }, 'Failed to get document file info from Telegram');
+        return null;
+      }
+
+      // Check file size before downloading
+      if (fileInfo.result.file_size && fileInfo.result.file_size > MAX_DOCUMENT_SIZE) {
+        logger.info({ fileId, size: fileInfo.result.file_size }, 'Document too large to inline');
+        return null;
+      }
+
+      const buffer = await fetch(
+        `https://api.telegram.org/file/bot${this.botToken}/${fileInfo.result.file_path}`,
+      ).then((r) => r.arrayBuffer());
+
+      if (buffer.byteLength > MAX_DOCUMENT_SIZE) {
+        logger.info({ fileId, size: buffer.byteLength }, 'Document too large to inline');
+        return null;
+      }
+
+      const content = Buffer.from(buffer).toString('utf-8');
+      logger.info({ fileId, fileName, size: content.length }, 'Document downloaded successfully');
+      return content;
+    } catch (err) {
+      logger.error({ err, fileId, fileName }, 'Document download failed');
+      return null;
+    }
   }
 
   async connect(): Promise<void> {
@@ -201,12 +450,126 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      // Use the highest-resolution photo (last in array)
+      const photos = ctx.message.photo;
+      const fileId = photos?.[photos.length - 1]?.file_id;
+      if (fileId) {
+        const description = await this.describePhoto(fileId);
+        if (description) {
+          const chatJid = `tg:${ctx.chat.id}`;
+          const group = this.opts.registeredGroups()[chatJid];
+          if (!group) return;
+          const timestamp = new Date(ctx.message.date * 1000).toISOString();
+          const senderName =
+            ctx.from?.first_name ||
+            ctx.from?.username ||
+            ctx.from?.id?.toString() ||
+            'Unknown';
+          const caption = ctx.message.caption ? `\nCaption: ${ctx.message.caption}` : '';
+          const isGroup =
+            ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+          this.opts.onChatMetadata(
+            chatJid,
+            timestamp,
+            undefined,
+            'telegram',
+            isGroup,
+          );
+          this.opts.onMessage(chatJid, {
+            id: ctx.message.message_id.toString(),
+            chat_jid: chatJid,
+            sender: ctx.from?.id?.toString() || '',
+            sender_name: senderName,
+            content: `[Photo]: ${description}${caption}`,
+            timestamp,
+            is_from_me: false,
+          });
+          return;
+        }
+      }
+      storeNonText(ctx, '[Photo]');
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
+    this.bot.on('message:voice', async (ctx) => {
+      const fileId = ctx.message.voice?.file_id;
+      if (fileId) {
+        const transcription = await this.transcribeVoice(fileId);
+        if (transcription) {
+          const chatJid = `tg:${ctx.chat.id}`;
+          const group = this.opts.registeredGroups()[chatJid];
+          if (!group) return;
+          const timestamp = new Date(ctx.message.date * 1000).toISOString();
+          const senderName =
+            ctx.from?.first_name ||
+            ctx.from?.username ||
+            ctx.from?.id?.toString() ||
+            'Unknown';
+          const isGroup =
+            ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+          this.opts.onChatMetadata(
+            chatJid,
+            timestamp,
+            undefined,
+            'telegram',
+            isGroup,
+          );
+          this.opts.onMessage(chatJid, {
+            id: ctx.message.message_id.toString(),
+            chat_jid: chatJid,
+            sender: ctx.from?.id?.toString() || '',
+            sender_name: senderName,
+            content: `[Voice]: ${transcription}`,
+            timestamp,
+            is_from_me: false,
+          });
+          return;
+        }
+      }
+      storeNonText(ctx, '[Voice message]');
+    });
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-    this.bot.on('message:document', (ctx) => {
+    this.bot.on('message:document', async (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
+      const fileId = ctx.message.document?.file_id;
+
+      // Try to download and inline text files
+      if (fileId && isTextFile(name)) {
+        const content = await this.downloadDocument(fileId, name);
+        if (content) {
+          const chatJid = `tg:${ctx.chat.id}`;
+          const group = this.opts.registeredGroups()[chatJid];
+          if (!group) return;
+          const timestamp = new Date(ctx.message.date * 1000).toISOString();
+          const senderName =
+            ctx.from?.first_name ||
+            ctx.from?.username ||
+            ctx.from?.id?.toString() ||
+            'Unknown';
+          const caption = ctx.message.caption ? `\n${ctx.message.caption}` : '';
+          const isGroup =
+            ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+          this.opts.onChatMetadata(
+            chatJid,
+            timestamp,
+            undefined,
+            'telegram',
+            isGroup,
+          );
+          this.opts.onMessage(chatJid, {
+            id: ctx.message.message_id.toString(),
+            chat_jid: chatJid,
+            sender: ctx.from?.id?.toString() || '',
+            sender_name: senderName,
+            content: `[Document: ${name}]\n\`\`\`\n${content}\n\`\`\`${caption}`,
+            timestamp,
+            is_from_me: false,
+          });
+          return;
+        }
+      }
+
+      // Fallback: store placeholder for binary/large/failed downloads
       storeNonText(ctx, `[Document: ${name}]`);
     });
     this.bot.on('message:sticker', (ctx) => {

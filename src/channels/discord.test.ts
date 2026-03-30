@@ -46,7 +46,7 @@ vi.mock('discord.js', () => {
 
   class MockClient {
     eventHandlers = new Map<string, Handler[]>();
-    user: any = { id: '999888777', tag: 'Andy#1234' };
+    user: any = { id: '999888777', tag: 'Andy#1234', username: 'Andy_bot' };
     private _ready = false;
 
     constructor(_opts: any) {
@@ -92,11 +92,14 @@ vi.mock('discord.js', () => {
   // Mock TextChannel type
   class TextChannel {}
 
+  const ThreadAutoArchiveDuration = { OneDay: 1440 };
+
   return {
     Client: MockClient,
     Events,
     GatewayIntentBits,
     TextChannel,
+    ThreadAutoArchiveDuration,
   };
 });
 
@@ -137,6 +140,7 @@ function createMessage(overrides: {
   attachments?: Map<string, any>;
   reference?: { messageId?: string };
   mentionsBotId?: boolean;
+  isThread?: boolean;
 }) {
   const channelId = overrides.channelId ?? '1234567890123456';
   const authorId = overrides.authorId ?? '55512345';
@@ -161,11 +165,10 @@ function createMessage(overrides: {
     member: overrides.memberDisplayName
       ? { displayName: overrides.memberDisplayName }
       : null,
-    guild: overrides.guildName
-      ? { name: overrides.guildName }
-      : null,
+    guild: overrides.guildName ? { name: overrides.guildName } : null,
     channel: {
       name: overrides.channelName ?? 'general',
+      isThread: vi.fn(() => overrides.isThread ?? false),
       messages: {
         fetch: vi.fn().mockResolvedValue({
           author: { username: 'Bob', displayName: 'Bob' },
@@ -487,6 +490,210 @@ describe('DiscordChannel', () => {
     });
   });
 
+  // --- Name-based trigger ---
+
+  describe('name-based trigger', () => {
+    it('triggers when bot first name appears in message', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      // Mock client username is 'Andy_bot', so "andy" should trigger
+      const msg = createMessage({
+        content: 'hey andy what time is it?',
+        guildName: 'Server',
+      });
+      await triggerMessage(msg);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'dc:1234567890123456',
+        expect.objectContaining({
+          content: '@Andy hey andy what time is it?',
+        }),
+      );
+    });
+
+    it('is case-insensitive', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const msg = createMessage({
+        content: 'ANDY help me',
+        guildName: 'Server',
+      });
+      await triggerMessage(msg);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'dc:1234567890123456',
+        expect.objectContaining({
+          content: '@Andy ANDY help me',
+        }),
+      );
+    });
+
+    it('requires word boundary (no partial match)', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const msg = createMessage({
+        content: 'I like candy',
+        guildName: 'Server',
+      });
+      await triggerMessage(msg);
+
+      // "candy" contains "andy" but not at word boundary — no trigger
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'dc:1234567890123456',
+        expect.objectContaining({
+          content: 'I like candy',
+        }),
+      );
+    });
+
+    it('does not double-trigger when @mention already matched', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      const msg = createMessage({
+        content: '<@999888777> andy help',
+        mentionsBotId: true,
+        guildName: 'Server',
+      });
+      await triggerMessage(msg);
+
+      // @mention trigger takes precedence; name trigger does not re-prepend
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'dc:1234567890123456',
+        expect.objectContaining({
+          content: '@Andy andy help',
+        }),
+      );
+    });
+  });
+
+  // --- Thread creation on reply ---
+
+  describe('thread creation on reply', () => {
+    it('creates thread from trigger message when replying', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      // Trigger message in a non-thread channel
+      const msg = createMessage({
+        content: '<@999888777> what is 2+2?',
+        mentionsBotId: true,
+        guildName: 'Server',
+      });
+      await triggerMessage(msg);
+
+      // Set up mock channel with messages.fetch and startThread
+      const mockThread = { id: 'thread_001', send: vi.fn().mockResolvedValue(undefined) };
+      const mockTriggerMsg = {
+        content: '@Andy what is 2+2?',
+        startThread: vi.fn().mockResolvedValue(mockThread),
+      };
+      const mockChannel = {
+        messages: { fetch: vi.fn().mockResolvedValue(mockTriggerMsg) },
+        send: vi.fn(),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage('dc:1234567890123456', 'The answer is 4.');
+
+      expect(mockTriggerMsg.startThread).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'what is 2+2?' }),
+      );
+      expect(mockThread.send).toHaveBeenCalledWith('The answer is 4.');
+    });
+
+    it('falls back to channel send when thread creation fails', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      // Trigger message
+      const msg = createMessage({
+        content: '<@999888777> help',
+        mentionsBotId: true,
+        guildName: 'Server',
+      });
+      await triggerMessage(msg);
+
+      // First fetch (for thread creation) — fail on startThread
+      const mockFailMsg = {
+        content: 'help',
+        startThread: vi.fn().mockRejectedValue(new Error('Cannot create thread')),
+      };
+      const mockFailChannel = {
+        messages: { fetch: vi.fn().mockResolvedValue(mockFailMsg) },
+        send: vi.fn(),
+      };
+      // Second fetch (fallback) — normal channel
+      const mockFallbackChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      currentClient().channels.fetch
+        .mockResolvedValueOnce(mockFailChannel)
+        .mockResolvedValueOnce(mockFallbackChannel);
+
+      await channel.sendMessage('dc:1234567890123456', 'Fallback reply');
+
+      expect(mockFallbackChannel.send).toHaveBeenCalledWith('Fallback reply');
+    });
+
+    it('does not create thread for messages already in a thread', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      // Trigger message but already in a thread
+      const msg = createMessage({
+        content: '<@999888777> followup question',
+        mentionsBotId: true,
+        guildName: 'Server',
+        isThread: true,
+      });
+      await triggerMessage(msg);
+
+      // Send reply — should go directly to channel, no thread creation
+      const mockChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage('dc:1234567890123456', 'Direct reply');
+
+      expect(mockChannel.send).toHaveBeenCalledWith('Direct reply');
+    });
+
+    it('does not create thread for non-trigger messages', async () => {
+      const opts = createTestOpts();
+      const channel = new DiscordChannel('test-token', opts);
+      await channel.connect();
+
+      // Regular message — no trigger
+      const msg = createMessage({
+        content: 'just chatting',
+        guildName: 'Server',
+      });
+      await triggerMessage(msg);
+
+      const mockChannel = {
+        send: vi.fn().mockResolvedValue(undefined),
+      };
+      currentClient().channels.fetch.mockResolvedValue(mockChannel);
+
+      await channel.sendMessage('dc:1234567890123456', 'Some reply');
+
+      // Should send directly, no thread
+      expect(mockChannel.send).toHaveBeenCalledWith('Some reply');
+    });
+  });
+
   // --- Attachments ---
 
   describe('attachments', () => {
@@ -641,8 +848,11 @@ describe('DiscordChannel', () => {
 
       await channel.sendMessage('dc:1234567890123456', 'Hello');
 
-      const fetchedChannel = await currentClient().channels.fetch('1234567890123456');
-      expect(currentClient().channels.fetch).toHaveBeenCalledWith('1234567890123456');
+      const fetchedChannel =
+        await currentClient().channels.fetch('1234567890123456');
+      expect(currentClient().channels.fetch).toHaveBeenCalledWith(
+        '1234567890123456',
+      );
     });
 
     it('strips dc: prefix from JID', async () => {

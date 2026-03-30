@@ -654,6 +654,167 @@ describe('TelegramChannel', () => {
       );
     });
 
+    it('downloads and inlines text document content', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const fileContent = '# Hello World\n\nThis is a test document.';
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        async (url: string | URL | Request) => {
+          const urlStr = url.toString();
+          if (urlStr.includes('/getFile')) {
+            return {
+              json: async () => ({
+                ok: true,
+                result: { file_path: 'documents/file_0.md', file_size: fileContent.length },
+              }),
+            } as Response;
+          }
+          // File download
+          return {
+            arrayBuffer: async () =>
+              new TextEncoder().encode(fileContent).buffer,
+          } as Response;
+        },
+      );
+
+      const ctx = createMediaCtx({
+        extra: { document: { file_name: 'notes.md', file_id: 'doc-123' } },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: expect.stringContaining('# Hello World'),
+        }),
+      );
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: expect.stringContaining('[Document: notes.md]'),
+        }),
+      );
+
+      fetchSpy.mockRestore();
+    });
+
+    it('includes caption with inlined document', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const fileContent = 'some content';
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        async (url: string | URL | Request) => {
+          const urlStr = url.toString();
+          if (urlStr.includes('/getFile')) {
+            return {
+              json: async () => ({
+                ok: true,
+                result: { file_path: 'documents/file_0.txt', file_size: fileContent.length },
+              }),
+            } as Response;
+          }
+          return {
+            arrayBuffer: async () =>
+              new TextEncoder().encode(fileContent).buffer,
+          } as Response;
+        },
+      );
+
+      const ctx = createMediaCtx({
+        caption: 'Please review this',
+        extra: { document: { file_name: 'data.txt', file_id: 'doc-456' } },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: expect.stringContaining('Please review this'),
+        }),
+      );
+
+      fetchSpy.mockRestore();
+    });
+
+    it('falls back to placeholder for binary files', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createMediaCtx({
+        extra: { document: { file_name: 'image.png', file_id: 'doc-789' } },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ content: '[Document: image.png]' }),
+      );
+    });
+
+    it('falls back to placeholder when download fails', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        async () => {
+          return {
+            json: async () => ({ ok: false }),
+          } as Response;
+        },
+      );
+
+      const ctx = createMediaCtx({
+        extra: { document: { file_name: 'notes.md', file_id: 'doc-fail' } },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ content: '[Document: notes.md]' }),
+      );
+
+      fetchSpy.mockRestore();
+    });
+
+    it('falls back to placeholder for oversized text files', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+        async (url: string | URL | Request) => {
+          const urlStr = url.toString();
+          if (urlStr.includes('/getFile')) {
+            return {
+              json: async () => ({
+                ok: true,
+                result: { file_path: 'documents/big.md', file_size: 200_000 },
+              }),
+            } as Response;
+          }
+          return { arrayBuffer: async () => new ArrayBuffer(0) } as Response;
+        },
+      );
+
+      const ctx = createMediaCtx({
+        extra: { document: { file_name: 'big.md', file_id: 'doc-big' } },
+      });
+      await triggerMediaMessage('message:document', ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({ content: '[Document: big.md]' }),
+      );
+
+      fetchSpy.mockRestore();
+    });
+
     it('stores sticker with emoji', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);

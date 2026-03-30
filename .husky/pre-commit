@@ -1,1 +1,10 @@
 npm run format:fix
+
+# Guard: prevent accidental deletion of channel files referenced in src/channels/index.ts
+for channel in $(grep -oP "import '\./\K[^'.]+" src/channels/index.ts 2>/dev/null); do
+  if git diff --cached --name-status | grep -q "^D.*src/channels/${channel}.ts$"; then
+    echo "ERROR: src/channels/${channel}.ts is staged for deletion but still imported in src/channels/index.ts"
+    echo "If intentional, remove the import from src/channels/index.ts first."
+    exit 1
+  fi
+done

@@ -1,4 +1,11 @@
-import { Client, Events, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import {
+  Client,
+  Events,
+  GatewayIntentBits,
+  Message,
+  TextChannel,
+  ThreadAutoArchiveDuration,
+} from 'discord.js';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -23,6 +30,9 @@ export class DiscordChannel implements Channel {
   private client: Client | null = null;
   private opts: DiscordChannelOpts;
   private botToken: string;
+  /** Maps channelId → messageId of the trigger message.
+   *  Used to create a thread when the bot first replies. */
+  private pendingThreadSource = new Map<string, string>();
 
   constructor(botToken: string, opts: DiscordChannelOpts) {
     this.botToken = botToken;
@@ -63,6 +73,8 @@ export class DiscordChannel implements Channel {
         chatName = senderName;
       }
 
+      let isTrigger = false;
+
       // Translate Discord @bot mentions into TRIGGER_PATTERN format.
       // Discord mentions look like <@botUserId> — these won't match
       // TRIGGER_PATTERN (e.g., ^@Andy\b), so we prepend the trigger
@@ -83,23 +95,44 @@ export class DiscordChannel implements Channel {
           if (!TRIGGER_PATTERN.test(content)) {
             content = `@${ASSISTANT_NAME} ${content}`;
           }
+          isTrigger = true;
         }
+
+        // Also trigger when the bot's name is mentioned anywhere in the
+        // message (e.g. "hey julia what's up") — case-insensitive, word boundary.
+        if (!isTrigger && this.client.user.username) {
+          const botFirstName = this.client.user.username.split(/[_\s]/)[0];
+          const escaped = botFirstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const namePattern = new RegExp(`\\b${escaped}\\b`, 'i');
+          if (namePattern.test(content) && !TRIGGER_PATTERN.test(content)) {
+            content = `@${ASSISTANT_NAME} ${content}`;
+            isTrigger = true;
+          }
+        }
+      }
+
+      // Track trigger message so sendMessage can create a thread for the reply.
+      // Only for messages in regular text channels (not already in threads).
+      if (isTrigger && !message.channel.isThread?.()) {
+        this.pendingThreadSource.set(channelId, msgId);
       }
 
       // Handle attachments — store placeholders so the agent knows something was sent
       if (message.attachments.size > 0) {
-        const attachmentDescriptions = [...message.attachments.values()].map((att) => {
-          const contentType = att.contentType || '';
-          if (contentType.startsWith('image/')) {
-            return `[Image: ${att.name || 'image'}]`;
-          } else if (contentType.startsWith('video/')) {
-            return `[Video: ${att.name || 'video'}]`;
-          } else if (contentType.startsWith('audio/')) {
-            return `[Audio: ${att.name || 'audio'}]`;
-          } else {
-            return `[File: ${att.name || 'file'}]`;
-          }
-        });
+        const attachmentDescriptions = [...message.attachments.values()].map(
+          (att) => {
+            const contentType = att.contentType || '';
+            if (contentType.startsWith('image/')) {
+              return `[Image: ${att.name || 'image'}]`;
+            } else if (contentType.startsWith('video/')) {
+              return `[Video: ${att.name || 'video'}]`;
+            } else if (contentType.startsWith('audio/')) {
+              return `[Audio: ${att.name || 'audio'}]`;
+            } else {
+              return `[File: ${att.name || 'file'}]`;
+            }
+          },
+        );
         if (content) {
           content = `${content}\n${attachmentDescriptions.join('\n')}`;
         } else {
@@ -125,7 +158,13 @@ export class DiscordChannel implements Channel {
 
       // Store chat metadata for discovery
       const isGroup = message.guild !== null;
-      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'discord', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        chatName,
+        'discord',
+        isGroup,
+      );
 
       // Only deliver full message for registered groups
       const group = this.opts.registeredGroups()[chatJid];
@@ -182,25 +221,53 @@ export class DiscordChannel implements Channel {
       return;
     }
 
+    const MAX_LENGTH = 2000;
+
     try {
       const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
 
+      // If there's a pending trigger message, start a thread from it.
+      const triggerMsgId = this.pendingThreadSource.get(channelId);
+      if (triggerMsgId) {
+        this.pendingThreadSource.delete(channelId);
+        try {
+          const channel = await this.client.channels.fetch(channelId);
+          if (channel && 'messages' in channel) {
+            const textChannel = channel as TextChannel;
+            const triggerMsg = await textChannel.messages.fetch(triggerMsgId);
+            const threadName =
+              triggerMsg.content.replace(/^@\S+\s*/i, '').slice(0, 50).trim() ||
+              'Conversation';
+            const thread = await triggerMsg.startThread({
+              name: threadName,
+              autoArchiveDuration: ThreadAutoArchiveDuration.OneDay,
+            });
+            for (let i = 0; i < text.length; i += MAX_LENGTH) {
+              await thread.send(text.slice(i, i + MAX_LENGTH));
+            }
+            logger.info(
+              { jid, threadId: thread.id, length: text.length },
+              'Discord reply sent in new thread',
+            );
+            return;
+          }
+        } catch (threadErr) {
+          logger.warn(
+            { jid, triggerMsgId, err: threadErr },
+            'Failed to create thread, falling back to channel send',
+          );
+        }
+      }
+
+      const channel = await this.client.channels.fetch(channelId);
       if (!channel || !('send' in channel)) {
         logger.warn({ jid }, 'Discord channel not found or not text-based');
         return;
       }
 
       const textChannel = channel as TextChannel;
-
-      // Discord has a 2000 character limit per message — split if needed
-      const MAX_LENGTH = 2000;
-      if (text.length <= MAX_LENGTH) {
-        await textChannel.send(text);
-      } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await textChannel.send(text.slice(i, i + MAX_LENGTH));
-        }
+      for (let i = 0; i < text.length; i += MAX_LENGTH) {
+        await textChannel.send(text.slice(i, i + MAX_LENGTH));
       }
       logger.info({ jid, length: text.length }, 'Discord message sent');
     } catch (err) {
