@@ -63,6 +63,38 @@ server.tool(
 );
 
 server.tool(
+  'send_file',
+  'Send a file/document to the user or group via Telegram (or other channel that supports file sending). The file must exist at the given path inside the container. Use this after converting or creating files the user needs.',
+  {
+    file_path: z.string().describe('Absolute path to the file inside the container (e.g., /workspace/group/uploads/report.pdf)'),
+    file_name: z.string().optional().describe('Display name for the file (e.g., "report.pdf"). Defaults to the basename of file_path.'),
+    caption: z.string().optional().describe('Optional caption/message to accompany the file'),
+  },
+  async (args) => {
+    if (!fs.existsSync(args.file_path)) {
+      return {
+        content: [{ type: 'text' as const, text: `File not found: ${args.file_path}` }],
+        isError: true,
+      };
+    }
+
+    const data: Record<string, string | undefined> = {
+      type: 'send_file',
+      chatJid,
+      filePath: args.file_path,
+      fileName: args.file_name || undefined,
+      caption: args.caption || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: `File queued for sending: ${args.file_name || path.basename(args.file_path)}` }] };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 
