@@ -1,8 +1,12 @@
+import fs from 'fs';
 import https from 'https';
-import { Api, Bot } from 'grammy';
+import path from 'path';
+
+import { Api, Bot, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -66,6 +70,31 @@ function isTextFile(fileName: string): boolean {
   const dot = fileName.lastIndexOf('.');
   if (dot === -1) return false;
   return TEXT_EXTENSIONS.has(fileName.slice(dot).toLowerCase());
+}
+
+const BINARY_DOCUMENT_EXTENSIONS = new Set([
+  '.docx',
+  '.doc',
+  '.pdf',
+  '.xlsx',
+  '.xls',
+  '.pptx',
+  '.ppt',
+  '.odt',
+  '.ods',
+  '.odp',
+  '.zip',
+  '.tar',
+  '.gz',
+  '.7z',
+]);
+
+const MAX_BINARY_DOCUMENT_SIZE = 20 * 1024 * 1024; // 20MB
+
+function isBinaryDocument(fileName: string): boolean {
+  const dot = fileName.lastIndexOf('.');
+  if (dot === -1) return false;
+  return BINARY_DOCUMENT_EXTENSIONS.has(fileName.slice(dot).toLowerCase());
 }
 
 export interface TelegramChannelOpts {
@@ -354,6 +383,63 @@ export class TelegramChannel implements Channel {
     }
   }
 
+  private async saveBinaryDocument(
+    fileId: string,
+    fileName: string,
+    groupFolder: string,
+  ): Promise<string | null> {
+    try {
+      logger.info({ fileId, fileName }, 'Binary document download started');
+
+      const fileInfo = (await fetch(
+        `https://api.telegram.org/bot${this.botToken}/getFile?file_id=${encodeURIComponent(fileId)}`,
+      ).then((r) => r.json())) as {
+        ok: boolean;
+        result?: { file_path: string; file_size?: number };
+      };
+
+      if (!fileInfo.ok || !fileInfo.result?.file_path) {
+        logger.warn({ fileId }, 'Failed to get binary document info from Telegram');
+        return null;
+      }
+
+      if (
+        fileInfo.result.file_size &&
+        fileInfo.result.file_size > MAX_BINARY_DOCUMENT_SIZE
+      ) {
+        logger.info(
+          { fileId, size: fileInfo.result.file_size },
+          'Binary document too large to download',
+        );
+        return null;
+      }
+
+      const buffer = await fetch(
+        `https://api.telegram.org/file/bot${this.botToken}/${fileInfo.result.file_path}`,
+      ).then((r) => r.arrayBuffer());
+
+      // Save to group uploads directory
+      const groupPath = resolveGroupFolderPath(groupFolder);
+      const uploadsDir = path.join(groupPath, 'uploads');
+      fs.mkdirSync(uploadsDir, { recursive: true });
+
+      // Sanitize filename (keep Polish chars, alphanumerics, dots, dashes, underscores)
+      const safeName = fileName.replace(/[^\w.\-\u00C0-\u017E]/g, '_');
+      const filePath = path.join(uploadsDir, safeName);
+      fs.writeFileSync(filePath, Buffer.from(buffer));
+
+      const containerPath = `/workspace/group/uploads/${safeName}`;
+      logger.info(
+        { fileId, fileName, containerPath, size: buffer.byteLength },
+        'Binary document saved successfully',
+      );
+      return containerPath;
+    } catch (err) {
+      logger.error({ err, fileId, fileName }, 'Binary document save failed');
+      return null;
+    }
+  }
+
   async connect(): Promise<void> {
     this.bot = new Bot(this.botToken, {
       client: {
@@ -462,6 +548,13 @@ export class TelegramChannel implements Channel {
         thread_id: threadId ? threadId.toString() : undefined,
       });
 
+      // Immediately acknowledge so the sender knows the bot is on it
+      this.bot?.api
+        .sendMessage(ctx.chat.id, 'On it...', {
+          ...(threadId ? { message_thread_id: threadId } : {}),
+        })
+        .catch(() => {});
+
       logger.info(
         { chatJid, chatName, sender: senderName },
         'Telegram message stored',
@@ -500,9 +593,17 @@ export class TelegramChannel implements Channel {
         timestamp,
         is_from_me: false,
       });
+
+      this.bot?.api
+        .sendMessage(ctx.chat.id, 'On it...')
+        .catch(() => {});
     };
 
     this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      if (this.opts.registeredGroups()[chatJid]) {
+        this.bot?.api.sendMessage(ctx.chat.id, 'On it...').catch(() => {});
+      }
       // Use the highest-resolution photo (last in array)
       const photos = ctx.message.photo;
       const fileId = photos?.[photos.length - 1]?.file_id;
@@ -546,6 +647,10 @@ export class TelegramChannel implements Channel {
     });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      if (this.opts.registeredGroups()[chatJid]) {
+        this.bot?.api.sendMessage(ctx.chat.id, 'On it...').catch(() => {});
+      }
       const fileId = ctx.message.voice?.file_id;
       if (fileId) {
         const transcription = await this.transcribeVoice(fileId);
@@ -584,6 +689,10 @@ export class TelegramChannel implements Channel {
     });
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot.on('message:document', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      if (this.opts.registeredGroups()[chatJid]) {
+        this.bot?.api.sendMessage(ctx.chat.id, 'On it...').catch(() => {});
+      }
       const name = ctx.message.document?.file_name || 'file';
       const fileId = ctx.message.document?.file_id;
 
@@ -620,6 +729,49 @@ export class TelegramChannel implements Channel {
             is_from_me: false,
           });
           return;
+        }
+      }
+
+      // Try to save binary documents (docx, pdf, xlsx, etc.) to uploads dir
+      if (fileId && isBinaryDocument(name)) {
+        const chatJidBin = `tg:${ctx.chat.id}`;
+        const groupBin = this.opts.registeredGroups()[chatJidBin];
+        if (groupBin) {
+          const containerPath = await this.saveBinaryDocument(
+            fileId,
+            name,
+            groupBin.folder,
+          );
+          if (containerPath) {
+            const timestamp = new Date(ctx.message.date * 1000).toISOString();
+            const senderName =
+              ctx.from?.first_name ||
+              ctx.from?.username ||
+              ctx.from?.id?.toString() ||
+              'Unknown';
+            const caption = ctx.message.caption
+              ? ` ${ctx.message.caption}`
+              : '';
+            const isGroup =
+              ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+            this.opts.onChatMetadata(
+              chatJidBin,
+              timestamp,
+              undefined,
+              'telegram',
+              isGroup,
+            );
+            this.opts.onMessage(chatJidBin, {
+              id: ctx.message.message_id.toString(),
+              chat_jid: chatJidBin,
+              sender: ctx.from?.id?.toString() || '',
+              sender_name: senderName,
+              content: `[Document: ${name} saved to ${containerPath}]${caption}`,
+              timestamp,
+              is_from_me: false,
+            });
+            return;
+          }
         }
       }
 
@@ -692,6 +844,32 @@ export class TelegramChannel implements Channel {
       );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  async sendFile(
+    jid: string,
+    filePath: string,
+    fileName?: string,
+    caption?: string,
+  ): Promise<void> {
+    if (!this.bot) {
+      logger.warn('Telegram bot not initialized');
+      return;
+    }
+
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      const document = new InputFile(filePath, fileName || path.basename(filePath));
+      await this.bot.api.sendDocument(numericId, document, {
+        caption: caption || undefined,
+      });
+      logger.info(
+        { jid, filePath, fileName },
+        'Telegram file sent',
+      );
+    } catch (err) {
+      logger.error({ jid, filePath, err }, 'Failed to send Telegram file');
     }
   }
 
