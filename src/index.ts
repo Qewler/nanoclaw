@@ -48,7 +48,12 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
-import { findChannel, formatMessages, formatOutbound, routeFile } from './router.js';
+import {
+  findChannel,
+  formatMessages,
+  formatOutbound,
+  routeFile,
+} from './router.js';
 import {
   restoreRemoteControl,
   startRemoteControl,

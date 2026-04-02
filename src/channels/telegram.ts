@@ -399,7 +399,10 @@ export class TelegramChannel implements Channel {
       };
 
       if (!fileInfo.ok || !fileInfo.result?.file_path) {
-        logger.warn({ fileId }, 'Failed to get binary document info from Telegram');
+        logger.warn(
+          { fileId },
+          'Failed to get binary document info from Telegram',
+        );
         return null;
       }
 
@@ -594,9 +597,7 @@ export class TelegramChannel implements Channel {
         is_from_me: false,
       });
 
-      this.bot?.api
-        .sendMessage(ctx.chat.id, 'On it...')
-        .catch(() => {});
+      this.bot?.api.sendMessage(ctx.chat.id, 'On it...').catch(() => {});
     };
 
     this.bot.on('message:photo', async (ctx) => {
@@ -860,14 +861,14 @@ export class TelegramChannel implements Channel {
 
     try {
       const numericId = jid.replace(/^tg:/, '');
-      const document = new InputFile(filePath, fileName || path.basename(filePath));
+      const document = new InputFile(
+        filePath,
+        fileName || path.basename(filePath),
+      );
       await this.bot.api.sendDocument(numericId, document, {
         caption: caption || undefined,
       });
-      logger.info(
-        { jid, filePath, fileName },
-        'Telegram file sent',
-      );
+      logger.info({ jid, filePath, fileName }, 'Telegram file sent');
     } catch (err) {
       logger.error({ jid, filePath, err }, 'Failed to send Telegram file');
     }

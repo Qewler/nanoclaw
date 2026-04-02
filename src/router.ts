@@ -53,7 +53,8 @@ export function routeFile(
 ): Promise<void> {
   const channel = channels.find((c) => c.ownsJid(jid) && c.isConnected());
   if (!channel) throw new Error(`No channel for JID: ${jid}`);
-  if (!channel.sendFile) throw new Error(`Channel ${channel.name} does not support file sending`);
+  if (!channel.sendFile)
+    throw new Error(`Channel ${channel.name} does not support file sending`);
   return channel.sendFile(jid, filePath, fileName, caption);
 }
 

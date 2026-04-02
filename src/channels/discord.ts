@@ -3,6 +3,7 @@ import {
   Events,
   GatewayIntentBits,
   Message,
+  Partials,
   TextChannel,
   ThreadAutoArchiveDuration,
 } from 'discord.js';
@@ -47,6 +48,7 @@ export class DiscordChannel implements Channel {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.DirectMessages,
       ],
+      partials: [Partials.Channel],
     });
 
     this.client.on(Events.MessageCreate, async (message: Message) => {

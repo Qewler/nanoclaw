@@ -95,6 +95,62 @@ server.tool(
 );
 
 server.tool(
+  'print_file',
+  `Print a file on the host's network printer. Main group only.
+The file must exist at the given path inside the container. Supported formats: PDF, text, images (PNG/JPG), and Office documents (DOC/DOCX/XLS/XLSX — convert to PDF with LibreOffice first for best results).
+A confirmation message is sent to the chat after the print job is queued.`,
+  {
+    file_path: z.string().describe('Absolute path to the file inside the container (e.g., /workspace/group/report.pdf)'),
+    printer: z.string().optional().describe('Printer name (e.g., "Brother_HL_L2442DW"). Defaults to system default printer.'),
+    copies: z.number().int().min(1).max(50).optional().describe('Number of copies (default: 1, max: 50)'),
+    page_range: z.string().optional().describe('Page range to print (e.g., "1-5", "1,3,5-10")'),
+    duplex: z.enum(['one-sided', 'two-sided-long-edge', 'two-sided-short-edge']).optional().describe('Duplex printing mode'),
+    paper_size: z.string().optional().describe('Paper size (e.g., "A4", "Letter")'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'Printing is only available from the main group.' }],
+        isError: true,
+      };
+    }
+
+    if (!fs.existsSync(args.file_path)) {
+      return {
+        content: [{ type: 'text' as const, text: `File not found: ${args.file_path}` }],
+        isError: true,
+      };
+    }
+
+    const data: Record<string, string | number | undefined> = {
+      type: 'print_file',
+      chatJid,
+      filePath: args.file_path,
+      printer: args.printer || undefined,
+      copies: args.copies || undefined,
+      pageRange: args.page_range || undefined,
+      duplex: args.duplex || undefined,
+      paperSize: args.paper_size || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    const details = [
+      args.copies && args.copies > 1 ? `${args.copies} copies` : undefined,
+      args.duplex,
+      args.paper_size,
+      args.printer || 'default printer',
+    ].filter(Boolean).join(', ');
+
+    return {
+      content: [{ type: 'text' as const, text: `Print job queued: ${path.basename(args.file_path)} (${details})` }],
+    };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 

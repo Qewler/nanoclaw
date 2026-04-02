@@ -1,5 +1,7 @@
+import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { promisify } from 'util';
 
 import { CronExpressionParser } from 'cron-parser';
 
@@ -137,7 +139,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                       data.caption as string | undefined,
                     );
                     logger.info(
-                      { chatJid: data.chatJid, filePath: resolvedHost, sourceGroup },
+                      {
+                        chatJid: data.chatJid,
+                        filePath: resolvedHost,
+                        sourceGroup,
+                      },
                       'IPC file sent',
                     );
                   }
@@ -146,6 +152,124 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC send_file attempt blocked',
                   );
+                }
+              } else if (
+                data.type === 'print_file' &&
+                data.filePath
+              ) {
+                if (!isMain) {
+                  logger.warn(
+                    { sourceGroup },
+                    'Unauthorized IPC print_file attempt blocked (non-main)',
+                  );
+                } else {
+                  const groupDir = resolveGroupFolderPath(sourceGroup);
+                  const hostPath = (data.filePath as string).replace(
+                    /^\/workspace\/group\//,
+                    groupDir + '/',
+                  );
+
+                  const resolvedHost = path.resolve(hostPath);
+                  const resolvedGroup = path.resolve(groupDir);
+                  if (!resolvedHost.startsWith(resolvedGroup + '/')) {
+                    logger.warn(
+                      { filePath: data.filePath, sourceGroup },
+                      'IPC print_file path traversal blocked',
+                    );
+                  } else if (!fs.existsSync(resolvedHost)) {
+                    logger.warn(
+                      { filePath: resolvedHost, sourceGroup },
+                      'IPC print_file: file not found',
+                    );
+                    if (data.chatJid) {
+                      await deps.sendMessage(
+                        data.chatJid as string,
+                        `Print failed: file not found (${path.basename(resolvedHost)})`,
+                      );
+                    }
+                  } else {
+                    const fileName = path.basename(resolvedHost);
+                    const lpArgs: string[] = [];
+
+                    // Printer selection
+                    if (data.printer && /^[\w-]+$/.test(data.printer as string)) {
+                      lpArgs.push('-d', data.printer as string);
+                    }
+
+                    // Copies
+                    const copies = parseInt(String(data.copies), 10);
+                    if (copies > 1 && copies <= 50) {
+                      lpArgs.push('-n', String(copies));
+                    }
+
+                    // Page range
+                    if (
+                      data.pageRange &&
+                      /^[\d,-]+$/.test(data.pageRange as string)
+                    ) {
+                      lpArgs.push('-P', data.pageRange as string);
+                    }
+
+                    // Duplex
+                    const duplexValues = [
+                      'one-sided',
+                      'two-sided-long-edge',
+                      'two-sided-short-edge',
+                    ];
+                    if (
+                      data.duplex &&
+                      duplexValues.includes(data.duplex as string)
+                    ) {
+                      lpArgs.push('-o', `sides=${data.duplex}`);
+                    }
+
+                    // Paper size
+                    if (
+                      data.paperSize &&
+                      /^[\w]+$/.test(data.paperSize as string)
+                    ) {
+                      lpArgs.push('-o', `media=${data.paperSize}`);
+                    }
+
+                    // File to print (must be last)
+                    lpArgs.push('--', resolvedHost);
+
+                    try {
+                      const execFileAsync = promisify(execFile);
+                      const { stdout } = await execFileAsync('lp', lpArgs);
+                      const details = [
+                        copies > 1 ? `${copies} copies` : undefined,
+                        data.duplex,
+                        data.paperSize,
+                        data.printer || 'default printer',
+                      ]
+                        .filter(Boolean)
+                        .join(', ');
+                      logger.info(
+                        { fileName, lpArgs, stdout: stdout.trim(), sourceGroup },
+                        'IPC print job queued',
+                      );
+                      if (data.chatJid) {
+                        await deps.sendMessage(
+                          data.chatJid as string,
+                          `Print job queued: ${fileName} (${details})`,
+                        );
+                      }
+                    } catch (err) {
+                      const errMsg =
+                        err instanceof Error ? err.message : String(err);
+                      logger.error(
+                        { fileName, lpArgs, err, sourceGroup },
+                        'IPC print_file: lp command failed',
+                      );
+                      if (data.chatJid) {
+                        await deps.sendMessage(
+                          data.chatJid as string,
+                          `Print failed: ${fileName} — ${errMsg}`,
+                        );
+                      }
+                    }
+                  }
                 }
               }
               fs.unlinkSync(filePath);
