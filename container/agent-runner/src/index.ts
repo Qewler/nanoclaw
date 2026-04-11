@@ -412,6 +412,7 @@ async function runQuery(
         'mcp__nanoclaw__*',
         'mcp__gmail__*',
         'mcp__gmail_qewler__*',
+        'mcp__producthunt__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -437,6 +438,13 @@ async function runQuery(
           env: {
             GMAIL_OAUTH_PATH: '/home/node/.gmail-mcp-qewler/gcp-oauth.keys.json',
             GMAIL_CREDENTIALS_PATH: '/home/node/.gmail-mcp-qewler/credentials.json',
+          },
+        },
+        producthunt: {
+          command: 'product-hunt-mcp',
+          args: [],
+          env: {
+            PRODUCT_HUNT_TOKEN: process.env.PRODUCT_HUNT_TOKEN || 'vault-managed',
           },
         },
       },

@@ -30,6 +30,15 @@ RUN apt-get update && apt-get install -y \
     libreoffice-impress \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Python 3 (minimal) + uv for Python-based MCP servers
+# UV_TOOL_DIR/UV_TOOL_BIN_DIR ensure the tool venv and binary are world-readable
+# (container runs as node user, not root)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
+       /root/.local/bin/uv tool install product-hunt-mcp
+
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium

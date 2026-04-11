@@ -153,10 +153,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     'Unauthorized IPC send_file attempt blocked',
                   );
                 }
-              } else if (
-                data.type === 'print_file' &&
-                data.filePath
-              ) {
+              } else if (data.type === 'print_file' && data.filePath) {
                 if (!isMain) {
                   logger.warn(
                     { sourceGroup },
@@ -192,7 +189,10 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     const lpArgs: string[] = [];
 
                     // Printer selection
-                    if (data.printer && /^[\w-]+$/.test(data.printer as string)) {
+                    if (
+                      data.printer &&
+                      /^[\w-]+$/.test(data.printer as string)
+                    ) {
                       lpArgs.push('-d', data.printer as string);
                     }
 
@@ -246,7 +246,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
                         .filter(Boolean)
                         .join(', ');
                       logger.info(
-                        { fileName, lpArgs, stdout: stdout.trim(), sourceGroup },
+                        {
+                          fileName,
+                          lpArgs,
+                          stdout: stdout.trim(),
+                          sourceGroup,
+                        },
                         'IPC print job queued',
                       );
                       if (data.chatJid) {
