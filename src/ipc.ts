@@ -628,13 +628,18 @@ export async function processTaskIpc(
         // Defense in depth: agent cannot set isMain via IPC.
         // Preserve isMain from the existing registration so IPC config
         // updates (e.g. adding additionalMounts) don't strip the flag.
+        // Same protection applies to containerConfig: if the IPC caller
+        // omits it, keep the existing value instead of wiping it. Without
+        // this, any register_group call that forgets to re-send mounts
+        // (a common mistake) silently destroys the group's mount config.
         const existingGroup = registeredGroups[data.jid];
         deps.registerGroup(data.jid, {
           name: data.name,
           folder: data.folder,
           trigger: data.trigger,
           added_at: new Date().toISOString(),
-          containerConfig: data.containerConfig,
+          containerConfig:
+            data.containerConfig ?? existingGroup?.containerConfig,
           requiresTrigger: data.requiresTrigger,
           isMain: existingGroup?.isMain,
         });
