@@ -13,6 +13,9 @@ import {
   CONTAINER_TIMEOUT,
   DATA_DIR,
   GROUPS_DIR,
+  HA_HOST_IP,
+  HASS_SERVER,
+  HASS_TOKEN,
   IDLE_TIMEOUT,
   ONECLI_URL,
   TIMEZONE,
@@ -176,8 +179,21 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Gmail credentials directories (for Gmail MCP inside the container)
   const homeDir = os.homedir();
+
+  // Dedicated Home Assistant SSH key (isolated from user's personal ~/.ssh).
+  // Used by the home-assistant-manager skill for `ssh root@homeassistant.local`
+  // and `scp` deployments. Read-only mount — the key is provisioned on the host.
+  const nanoclawSshDir = path.join(homeDir, '.nanoclaw', 'ssh');
+  if (fs.existsSync(nanoclawSshDir)) {
+    mounts.push({
+      hostPath: nanoclawSshDir,
+      containerPath: '/home/node/.ssh',
+      readonly: true,
+    });
+  }
+
+  // Gmail credentials directories (for Gmail MCP inside the container)
   const gmailDir = path.join(homeDir, '.gmail-mcp');
   if (fs.existsSync(gmailDir)) {
     mounts.push({
@@ -262,6 +278,17 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Home Assistant env for the home-assistant-manager skill (hass-cli reads these).
+  // Sourced from .env via config.ts (not process.env) so secrets don't leak
+  // to unrelated host child processes. HASS_TOKEN may later move to OneCLI.
+  if (HASS_SERVER) args.push('-e', `HASS_SERVER=${HASS_SERVER}`);
+  if (HASS_TOKEN) args.push('-e', `HASS_TOKEN=${HASS_TOKEN}`);
+  // Resolve homeassistant.local inside the container (no mDNS in Docker),
+  // so both `ssh root@homeassistant.local` and HASS_SERVER work.
+  if (HA_HOST_IP) {
+    args.push('--add-host', `homeassistant.local:${HA_HOST_IP}`);
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.

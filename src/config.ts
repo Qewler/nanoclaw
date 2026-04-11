@@ -10,6 +10,9 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
+  'HASS_SERVER',
+  'HASS_TOKEN',
+  'HA_HOST_IP',
 ]);
 
 export const ASSISTANT_NAME =
@@ -53,6 +56,15 @@ export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
 ); // 10MB default
 export const ONECLI_URL =
   process.env.ONECLI_URL || envConfig.ONECLI_URL || 'http://localhost:10254';
+
+// Home Assistant connection for the home-assistant-manager skill.
+// Read from .env but not loaded into process.env — passed explicitly as
+// container env vars in container-runner so the token stays out of
+// unrelated child processes on the host.
+export const HASS_SERVER =
+  process.env.HASS_SERVER || envConfig.HASS_SERVER || '';
+export const HASS_TOKEN = process.env.HASS_TOKEN || envConfig.HASS_TOKEN || '';
+export const HA_HOST_IP = process.env.HA_HOST_IP || envConfig.HA_HOST_IP || '';
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
   1,
   parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,

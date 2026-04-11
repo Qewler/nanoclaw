@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    openssh-client \
     && apt-get install -y --no-install-recommends \
     libreoffice-writer \
     libreoffice-calc \
@@ -37,7 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 \
     && rm -rf /var/lib/apt/lists/* \
     && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
-       /root/.local/bin/uv tool install product-hunt-mcp
+       /root/.local/bin/uv tool install product-hunt-mcp \
+    && UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin \
+       /root/.local/bin/uv tool install homeassistant-cli
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
