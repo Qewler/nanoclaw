@@ -2,6 +2,8 @@
  * NanoClaw Agent Runner
  * Runs inside a container, receives config via stdin, outputs result to stdout
  *
+ * Revision: 2026-04-11 — send_message supports optional chat_jid (cross-chat sends for main groups)
+ *
  * Input protocol:
  *   Stdin: Full ContainerInput JSON (read until EOF, like before)
  *   IPC:   Follow-up messages written as JSON files to /workspace/ipc/input/
