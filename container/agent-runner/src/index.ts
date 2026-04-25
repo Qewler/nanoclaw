@@ -108,6 +108,68 @@ async function readStdin(): Promise<string> {
   });
 }
 
+/**
+ * Model router: uses Haiku to classify task complexity and pick the right model.
+ * Returns 'opus' for deep reasoning, 'haiku' for quick lookups, 'sonnet' for everything else.
+ */
+async function classifyModel(prompt: string): Promise<'opus' | 'sonnet' | 'haiku'> {
+  // Fast-path: force Opus for prompts that clearly need agent orchestration
+  const lowerPrompt = prompt.toLowerCase();
+  const orchestrationSignals = [
+    'in parallel', 'delegate to', 'spawn agent', 'use agents',
+    'subagent', 'sub-agent', 'orchestrate', 'coordinate agents',
+    'multiple agents', 'agent team', 'fan out',
+  ];
+  if (orchestrationSignals.some(s => lowerPrompt.includes(s))) {
+    log('Orchestration keywords detected, forcing opus');
+    return 'opus';
+  }
+
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+  const apiKey = process.env.ANTHROPIC_API_KEY || '';
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 10,
+        temperature: 0,
+        messages: [{
+          role: 'user',
+          content: `Classify this task's required intelligence. Reply with EXACTLY one word — opus, sonnet, or haiku.
+
+opus: complex reasoning, debugging, architecture, creative writing, multi-step analysis, planning, code review, ANY task requiring agent orchestration or delegation to subagents
+sonnet: standard coding, explanations, moderate tasks, general conversation
+haiku: quick lookups, status checks, simple Q&A, scanning/summarizing text, translations, reformatting
+
+Task:
+${prompt.slice(0, 1500)}`,
+        }],
+      }),
+    });
+
+    if (!response.ok) {
+      log(`Model classification failed (HTTP ${response.status}), defaulting to sonnet`);
+      return 'sonnet';
+    }
+
+    const data = await response.json() as { content?: Array<{ text?: string }> };
+    const answer = data.content?.[0]?.text?.trim().toLowerCase();
+
+    if (answer === 'opus' || answer === 'haiku') return answer;
+    return 'sonnet';
+  } catch (err) {
+    log(`Model classification error: ${err instanceof Error ? err.message : String(err)}, defaulting to sonnet`);
+    return 'sonnet';
+  }
+}
+
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
@@ -340,6 +402,7 @@ async function runQuery(
   containerInput: ContainerInput,
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
+  model?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
   const stream = new MessageStream();
   stream.push(prompt);
@@ -396,6 +459,7 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      model,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
@@ -415,6 +479,7 @@ async function runQuery(
         'mcp__gmail__*',
         'mcp__gmail_qewler__*',
         'mcp__producthunt__*',
+        'mcp__brave_search__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -447,6 +512,13 @@ async function runQuery(
           args: [],
           env: {
             PRODUCT_HUNT_TOKEN: process.env.PRODUCT_HUNT_TOKEN || 'vault-managed',
+          },
+        },
+        brave_search: {
+          command: 'mcp-server-brave-search',
+          args: [],
+          env: {
+            BRAVE_API_KEY: process.env.BRAVE_API_KEY || '',
           },
         },
       },
@@ -600,13 +672,17 @@ async function main(): Promise<void> {
     prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptResult.data, null, 2)}\n\nInstructions:\n${containerInput.prompt}`;
   }
 
+  // Classify model based on initial prompt complexity
+  const model = await classifyModel(prompt);
+  log(`Model selected: ${model}`);
+
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {
-      log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
+      log(`Starting query (session: ${sessionId || 'new'}, model: ${model}, resumeAt: ${resumeAt || 'latest'})...`);
 
-      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
+      const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt, model);
       if (queryResult.newSessionId) {
         sessionId = queryResult.newSessionId;
       }
