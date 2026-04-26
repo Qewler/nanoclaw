@@ -15,6 +15,7 @@ import { sanitizeTelegramLegacyMarkdown } from './telegram-markdown-sanitize.js'
 import { registerChannelAdapter } from './channel-registry.js';
 import type { ChannelAdapter, ChannelSetup, InboundMessage } from './adapter.js';
 import { tryConsume } from './telegram-pairing.js';
+import { transcribeAudioAttachments } from './telegram-voice-transcription.js';
 
 /**
  * Retry a one-shot operation that can fail on transient network errors at
@@ -115,16 +116,28 @@ function createPairingInterceptor(
   hostOnInbound: ChannelSetup['onInbound'],
   token: string,
 ): ChannelSetup['onInbound'] {
+  // Transcribe voice attachments before any further routing — pairing matching
+  // and host routing both gate on `text`, so the transcription needs to land
+  // there before either sees the message.
+  const forward: ChannelSetup['onInbound'] = async (platformId, threadId, message) => {
+    try {
+      await transcribeAudioAttachments(message);
+    } catch (err) {
+      log.warn('Voice transcription threw — passing through', { err });
+    }
+    hostOnInbound(platformId, threadId, message);
+  };
+
   return async (platformId, threadId, message) => {
     try {
       const botUsername = await botUsernamePromise;
       if (!botUsername) {
-        hostOnInbound(platformId, threadId, message);
+        await forward(platformId, threadId, message);
         return;
       }
       const { text, authorUserId } = readInboundFields(message);
       if (!text) {
-        hostOnInbound(platformId, threadId, message);
+        await forward(platformId, threadId, message);
         return;
       }
       const consumed = await tryConsume({
@@ -135,7 +148,7 @@ function createPairingInterceptor(
         adminUserId: authorUserId,
       });
       if (!consumed) {
-        hostOnInbound(platformId, threadId, message);
+        await forward(platformId, threadId, message);
         return;
       }
       // Pairing matched — record the chat and short-circuit so the
@@ -190,7 +203,7 @@ function createPairingInterceptor(
     } catch (err) {
       log.error('Telegram pairing interceptor error', { err });
       // Fail open: pass through so a pairing bug doesn't break normal traffic.
-      hostOnInbound(platformId, threadId, message);
+      await forward(platformId, threadId, message);
     }
   };
 }

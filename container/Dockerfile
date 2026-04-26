@@ -51,10 +51,22 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         git \
         tini \
         unzip \
+        libreoffice-writer \
+        libreoffice-calc \
+        libreoffice-impress \
+        python3 \
+        python3-venv \
+        pipx \
     && if [ "$INSTALL_CJK_FONTS" = "true" ]; then \
         apt-get install -y --no-install-recommends fonts-noto-cjk; \
        fi \
     && rm -rf /var/lib/apt/lists/*
+
+# product-hunt-mcp is a Python tool. Install via pipx so the MCP entrypoint
+# (`product-hunt-mcp`) lands on PATH for the non-root `node` user. PIPX_HOME
+# placed under /opt so it's owned by root but readable by everyone.
+ENV PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin
+RUN pipx install --global product-hunt-mcp
 
 # Chromium path for agent-browser / Playwright consumers
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -103,6 +115,9 @@ RUN --mount=type=cache,target=/root/.cache/pnpm \
 
 RUN --mount=type=cache,target=/root/.cache/pnpm \
     pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+RUN --mount=type=cache,target=/root/.cache/pnpm \
+    pnpm install -g "@modelcontextprotocol/server-brave-search"
 
 # ---- Entrypoint --------------------------------------------------------------
 COPY entrypoint.sh /app/entrypoint.sh
