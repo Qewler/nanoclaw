@@ -62,11 +62,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
        fi \
     && rm -rf /var/lib/apt/lists/*
 
-# product-hunt-mcp is a Python tool. Install via pipx so the MCP entrypoint
-# (`product-hunt-mcp`) lands on PATH for the non-root `node` user. PIPX_HOME
-# placed under /opt so it's owned by root but readable by everyone.
-ENV PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin
-RUN pipx install --global product-hunt-mcp
+# product-hunt-mcp is a Python tool. Install via pipx with PIPX_HOME under
+# /opt so the venv is owned by root but world-readable, and bins land on
+# /usr/local/bin (already on every user's PATH). chmod a+rX after install
+# guarantees the non-root `node` user can execute the entrypoint script.
+ENV PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin PIPX_MAN_DIR=/usr/local/share/man
+RUN pipx install product-hunt-mcp && chmod -R a+rX /opt/pipx
 
 # Chromium path for agent-browser / Playwright consumers
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
