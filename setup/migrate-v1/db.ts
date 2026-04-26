@@ -115,9 +115,18 @@ export async function run(args: string[]): Promise<void> {
     return;
   }
 
+  // Older v1 schemas (< 1.2.43-ish) lack the `channel_name` column. Detect
+  // and fall back to selecting it as NULL so inferChannelType uses jid prefix.
+  const hasChannelName = (
+    v1Db
+      .prepare("PRAGMA table_info('registered_groups')")
+      .all() as Array<{ name: string }>
+  ).some((c) => c.name === 'channel_name');
   const v1Groups = v1Db
     .prepare(
-      'SELECT jid, name, folder, trigger_pattern, requires_trigger, is_main, channel_name FROM registered_groups',
+      hasChannelName
+        ? 'SELECT jid, name, folder, trigger_pattern, requires_trigger, is_main, channel_name FROM registered_groups'
+        : 'SELECT jid, name, folder, trigger_pattern, requires_trigger, is_main, NULL AS channel_name FROM registered_groups',
     )
     .all() as V1Group[];
   v1Db.close();
