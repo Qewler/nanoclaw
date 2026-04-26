@@ -221,6 +221,28 @@ function createPreCompactHook(assistantName?: string): HookCallback {
   };
 }
 
+// ── Per-message model classifier (NANOCLAW_MODEL_ROUTER=1) ──
+
+/**
+ * Patterns that signal the prompt needs Opus's deeper reasoning. Keywords are
+ * lowercase-matched against the trimmed prompt text. Subagent / orchestration
+ * phrases are the strongest indicator — those routinely benefit from Opus.
+ */
+const OPUS_KEYWORD_RE =
+  /\b(delegate|subagent|orchestrate|research|deep dive|analy[sz]e|complex|architect|design|brainstorm|plan(?:\s|$)|root cause|debug)\b/i;
+
+const ROUTER_HAIKU_MODEL = 'claude-haiku-4-5';
+const ROUTER_OPUS_MODEL = 'claude-opus-4-7';
+
+function classifyPromptModel(prompt: string): string {
+  const trimmed = prompt.trim();
+  if (trimmed.length >= 500) return ROUTER_OPUS_MODEL;
+  if (trimmed.includes('```')) return ROUTER_OPUS_MODEL;
+  if ((trimmed.match(/\n/g)?.length ?? 0) >= 4) return ROUTER_OPUS_MODEL;
+  if (OPUS_KEYWORD_RE.test(trimmed)) return ROUTER_OPUS_MODEL;
+  return ROUTER_HAIKU_MODEL;
+}
+
 // ── Provider ──
 
 /**
@@ -265,6 +287,14 @@ export class ClaudeProvider implements AgentProvider {
 
     const instructions = input.systemContext?.instructions;
 
+    // NANOCLAW_MODEL_ROUTER=1 → classify each prompt and pin the SDK to the
+    // appropriate model. Off by default (SDK uses its built-in default).
+    const routerEnabled = (this.env.NANOCLAW_MODEL_ROUTER ?? process.env.NANOCLAW_MODEL_ROUTER) === '1';
+    const routedModel = routerEnabled ? classifyPromptModel(input.prompt) : undefined;
+    if (routedModel) {
+      log(`Model router: ${routedModel} (prompt length=${input.prompt.length})`);
+    }
+
     const sdkResult = sdkQuery({
       prompt: stream,
       options: {
@@ -276,6 +306,7 @@ export class ClaudeProvider implements AgentProvider {
         allowedTools: TOOL_ALLOWLIST,
         disallowedTools: SDK_DISALLOWED_TOOLS,
         env: this.env,
+        ...(routedModel ? { model: routedModel } : {}),
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user'],

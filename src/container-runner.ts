@@ -22,6 +22,7 @@ import {
 import { readContainerConfig, writeContainerConfig } from './container-config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { composeGroupClaudeMd } from './claude-md-compose.js';
+import { readEnvFile } from './env.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getDb, hasTable } from './db/connection.js';
 import { initGroupFilesystem } from './group-init.js';
@@ -395,6 +396,14 @@ async function buildContainerArgs(
   // Environment — only vars read by code we don't own.
   // Everything NanoClaw-specific is in container.json (read by runner at startup).
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Per-message model classifier toggle. Off by default — set on the host
+  // (via .env or shell) to opt the agent-runner into prompt-aware routing.
+  const modelRouterEnv =
+    process.env.NANOCLAW_MODEL_ROUTER ?? readEnvFile(['NANOCLAW_MODEL_ROUTER']).NANOCLAW_MODEL_ROUTER;
+  if (modelRouterEnv === '1') {
+    args.push('-e', 'NANOCLAW_MODEL_ROUTER=1');
+  }
 
   // Provider-contributed env vars (e.g. XDG_DATA_HOME, OPENCODE_*, NO_PROXY).
   if (providerContribution.env) {
